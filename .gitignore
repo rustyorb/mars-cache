@@ -1,0 +1,10 @@
+dist/
+previews/
+__pycache__/
+.venv/
+.env
+.env.*
+*.zip
+*.log
+.verification/
+personal-cache/

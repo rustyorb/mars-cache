@@ -1,0 +1,10 @@
+* text=auto
+*.pdf binary
+*.png binary
+*.jpg binary
+*.gif binary
+*.webp binary
+*.py text eol=lf
+*.html text eol=lf
+*.json text eol=lf
+*.yml text eol=lf
