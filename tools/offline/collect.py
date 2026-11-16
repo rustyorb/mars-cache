@@ -44,12 +44,13 @@ def request_bytes(url,limit=LIMIT):
   try:
    hops=0
    while True:
-    if hops>5:raise ValueError('Too many redirects')
     if not source_host_allowed(current):raise ValueError('Unexpected source host: '+(urlparse(current).hostname or ''))
     with requests.get(current,headers=UA,timeout=(15,60),stream=True,allow_redirects=False) as r:
      if r.is_redirect or r.is_permanent_redirect or r.status_code in (301,302,303,307,308):
       loc=r.headers.get('Location')
       if not loc:raise ValueError('Redirect without Location')
+      # Cap is 5 follows, matching the recorded plan. hops>5 allowed a 6th follow.
+      if hops>=5:raise ValueError('Too many redirects')
       current=urljoin(current,loc);hops+=1;continue
      r.raise_for_status()
      if int(r.headers.get('Content-Length','0') or 0)>limit:raise ValueError('File exceeds collection limit')

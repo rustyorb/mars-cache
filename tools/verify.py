@@ -1,10 +1,12 @@
 """Validate site files and public-export boundaries without third-party packages."""
-import hashlib,json,re,sys,ipaddress
+import hashlib,json,re,sys,ipaddress,stat,os
 from pathlib import Path
 from html.parser import HTMLParser
 from urllib.parse import urlparse,unquote
 ROOT=Path(__file__).resolve().parents[1];SITE=ROOT/'site'
 BANNED_PARTS={'loompanics','private','personal-cache','mars-cache-personal','mars-cache-private'}
+RESERVED_SITE_PARTS={'health-and-sanitation','original-html'}
+SKIP_PARTS={'.git','dist','previews','__pycache__','tests'}
 # First-level site dirs that may exist; library subdirs from the 4c84262 public tree.
 ALLOWED_SITE_DIRS={'library'}
 ALLOWED_LIBRARY_DIRS={'assets','communications','maps-and-navigation','nuclear-and-radiation','preserving-food','tools-and-power','water-and-immediate-preparedness'}
@@ -57,6 +59,41 @@ def private_text_leaks(text):
 
 def path_has_banned_part(path):
  return any(part.casefold() in BANNED_PARTS for part in Path(path).parts)
+
+def path_has_reserved_site_part(path,site=None):
+ site=Path(site or SITE)
+ path=Path(path)
+ if not path.is_relative_to(site):
+  return False
+ return any(part.casefold() in RESERVED_SITE_PARTS for part in path.relative_to(site).parts)
+
+def path_has_symlink(path,root):
+ # Same walk as tools/build.py: lstat the unresolved path and every parent up to root.
+ path=Path(path);root=Path(root)
+ cur=path
+ while True:
+  try:
+   mode=cur.lstat().st_mode
+  except FileNotFoundError:
+   mode=None
+  else:
+   if stat.S_ISLNK(mode):
+    return True
+  if cur==root or cur.parent==cur:
+   break
+  try:
+   cur.relative_to(root)
+  except ValueError:
+   break
+  cur=cur.parent
+ return False
+
+def iter_site_entries(site):
+ site=Path(site)
+ for dirpath,dirnames,filenames in os.walk(site,followlinks=False):
+  d=Path(dirpath)
+  for name in list(dirnames)+list(filenames):
+   yield d/name
 
 def site_layout_allowed(path,site=None):
  site=Path(site or SITE)
@@ -111,8 +148,14 @@ def main():
    target=(p.parent/unquote(parsed.path)).resolve()
    if not target.is_relative_to(SITE) or not target.exists():errors.append('Broken local link: '+str(p.relative_to(SITE))+' -> '+u)
    local_links+=1
+ for p in iter_site_entries(SITE):
+  if path_has_symlink(p,SITE):
+   errors.append('Refusing symlink in published site/: '+str(p.relative_to(ROOT)))
  for p in ROOT.rglob('*'):
-  if not p.is_file() or any(x in p.parts for x in ['.git','dist','previews','__pycache__']):continue
+  if any(x in p.parts for x in SKIP_PARTS):continue
+  if p.is_relative_to(SITE) and path_has_symlink(p,SITE):
+   errors.append('Refusing symlink in published site/: '+str(p.relative_to(ROOT)));continue
+  if not p.is_file():continue
   if path_has_banned_part(p):
    errors.append('Private or personal path in published tree: '+str(p.relative_to(ROOT)));continue
   if p.is_relative_to(SITE) and not site_layout_allowed(p,SITE):
@@ -122,8 +165,9 @@ def main():
    text=p.read_text(encoding='utf-8-sig')
    if private_text_leaks(text):
     errors.append('Potential private export in '+str(p.relative_to(ROOT)))
-  if p.is_relative_to(SITE) and ('health-and-sanitation' in p.parts or 'original-html' in p.parts):errors.append('Private/publisher-restricted folder exported: '+str(p))
- size=sum(p.stat().st_size for p in SITE.rglob('*') if p.is_file())
+  if path_has_reserved_site_part(p,SITE):
+   errors.append('Private/publisher-restricted folder exported: '+str(p.relative_to(ROOT)))
+ size=sum(p.stat().st_size for p in SITE.rglob('*') if p.is_file() and not p.is_symlink())
  if size>=1024**3:errors.append('Published site exceeds GitHub Pages size limit')
  report={'resources':len(catalog),'hosted_files_checked':checked,'publisher_links':sum(x['availability']=='publisher' for x in catalog),'local_links_checked':local_links,'site_bytes':size,'errors':errors}
  print(json.dumps(report,indent=2))
