@@ -19,6 +19,18 @@ TOTAL_LIMIT=1024*1024*1024
 budget_lock=threading.Lock()
 downloaded=0
 UA={'User-Agent':requests.utils.default_user_agent()}
+ALLOWED_HOSTS={
+ 'hesperian.org','prd-tnm.s3.amazonaws.com',
+ 'www.cdc.gov','stacks.cdc.gov','nchfp.uga.edu',
+ 'transportation.ky.gov','ag.purdue.edu','www.extension.purdue.edu',
+ 'remm.hhs.gov','www.weather.gov','www.epa.gov','www.fema.gov',
+ 'www.in.gov','www.fs.usda.gov','www.energy.gov',
+ 'publications.ca.uky.edu',
+}
+def source_host_allowed(url):
+ from urllib.parse import urlparse
+ parsed=urlparse(url);host=(parsed.hostname or '').lower()
+ return parsed.scheme=='https' and host in ALLOWED_HOSTS
 CSS='''body{max-width:960px;margin:0 auto;padding:24px;font:18px/1.65 system-ui,sans-serif;color:#20251f;background:#faf9f4}a{color:#205a3a}img{max-width:100%;height:auto}table{border-collapse:collapse;max-width:100%;display:block;overflow:auto}th,td{border:1px solid #a6aaa0;padding:.5em}header{border-bottom:2px solid #52664a;padding-bottom:1em;margin-bottom:2em}header p{font-size:14px;line-height:1.5}.notice{background:#eeeede;padding:1em}pre{white-space:pre-wrap}h1,h2,h3{line-height:1.25}@media print{body{padding:0;font-size:12pt}header p{font-size:9pt}a{color:inherit}}'''
 
 def now():return datetime.now(timezone.utc).isoformat()
@@ -26,21 +38,31 @@ def sha(b):return hashlib.sha256(b).hexdigest()
 def slug(t):return re.sub(r'[^a-z0-9]+','-',t.lower()).strip('-')[:100] or 'document'
 def request_bytes(url,limit=LIMIT):
  global downloaded
- if urlparse(url).scheme not in ('https','http'):raise ValueError('Unsupported URL scheme')
+ if not source_host_allowed(url):raise ValueError('Unexpected source host: '+(urlparse(url).hostname or ''))
+ current=url
  for attempt in range(2):
   try:
-   with requests.get(url,headers=UA,timeout=(15,60),stream=True) as r:
-    r.raise_for_status()
-    if int(r.headers.get('Content-Length','0') or 0)>limit:raise ValueError('File exceeds collection limit')
-    chunks=[];n=0
-    for c in r.iter_content(128*1024):
-     n+=len(c)
-     if n>limit:raise ValueError('File exceeds collection limit')
-     with budget_lock:
-      if downloaded+len(c)>TOTAL_LIMIT:raise ValueError('Collection download budget exhausted')
-      downloaded+=len(c)
-     chunks.append(c)
-    return b''.join(chunks),r.url,dict(r.headers)
+   hops=0
+   while True:
+    if not source_host_allowed(current):raise ValueError('Unexpected source host: '+(urlparse(current).hostname or ''))
+    with requests.get(current,headers=UA,timeout=(15,60),stream=True,allow_redirects=False) as r:
+     if r.is_redirect or r.is_permanent_redirect or r.status_code in (301,302,303,307,308):
+      loc=r.headers.get('Location')
+      if not loc:raise ValueError('Redirect without Location')
+      # Cap is 5 follows, matching the recorded plan. hops>5 allowed a 6th follow.
+      if hops>=5:raise ValueError('Too many redirects')
+      current=urljoin(current,loc);hops+=1;continue
+     r.raise_for_status()
+     if int(r.headers.get('Content-Length','0') or 0)>limit:raise ValueError('File exceeds collection limit')
+     chunks=[];n=0
+     for c in r.iter_content(128*1024):
+      n+=len(c)
+      if n>limit:raise ValueError('File exceeds collection limit')
+      with budget_lock:
+       if downloaded+len(c)>TOTAL_LIMIT:raise ValueError('Collection download budget exhausted')
+       downloaded+=len(c)
+      chunks.append(c)
+     return b''.join(chunks),r.url,dict(r.headers)
   except (requests.Timeout,requests.ConnectionError):
    if attempt:raise
    time.sleep(1)
