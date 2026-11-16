@@ -8,7 +8,7 @@ from collections import defaultdict,Counter
 from pathlib import Path
 from html import escape as esc
 from urllib.parse import urlparse,unquote
-import sys
+import sys,stat
 
 ROOT=Path(__file__).resolve().parents[1]
 ORDER=['Water and immediate preparedness','Nuclear and radiation','Health and sanitation','Maps and navigation','Growing food','Preserving food','Tools and power','Communications']
@@ -29,6 +29,38 @@ def natural(s):return [int(x) if x.isdigit() else x.lower() for x in re.split('(
 def size(n):return f'{n/1024/1024:.1f} MiB' if n>=1024*1024 else f'{n/1024:.0f} KiB'
 def slug(s):return re.sub('[^a-z]+','-',s.lower()).strip('-')
 
+def path_has_symlink(path,root):
+ path=Path(path);root=Path(root)
+ cur=path
+ while True:
+  try:
+   mode=cur.lstat().st_mode
+  except FileNotFoundError:
+   mode=None
+  else:
+   if stat.S_ISLNK(mode):
+    return True
+  if cur==root or cur.parent==cur:
+   break
+  try:
+   cur.relative_to(root)
+  except ValueError:
+   break
+  cur=cur.parent
+ return False
+def public_export_paths(collection,site,local_path):
+ collection_raw=Path(collection);site_raw=Path(site)
+ raw_src=collection_raw/local_path;raw_dst=site_raw/local_path
+ if path_has_symlink(raw_src,collection_raw) or path_has_symlink(raw_dst,site_raw):
+  raise ValueError('Refusing symlink source or destination: '+str(local_path))
+ collection=collection_raw.resolve();site=site_raw.resolve()
+ src=raw_src.resolve();dst=raw_dst.resolve()
+ if not src.is_relative_to(collection):
+  raise ValueError('Refusing source outside the collection: '+str(local_path))
+ if not dst.is_relative_to(site):
+  raise ValueError('Refusing destination outside site/: '+str(local_path))
+ return src,dst
+
 def run(collection):
  sys.path.insert(0,str(collection/'tools/vendor'))
  from bs4 import BeautifulSoup
@@ -45,12 +77,12 @@ def run(collection):
  for title in ['Where There Is No Doctor','New Where There Is No Doctor','Where There Is No Dentist','A Community Guide to Environmental Health']:
   sample=next(x for x in original if x.get('group')==title and x['status']=='collected')
   records.append(dict(id=hashlib.sha256(title.encode()).hexdigest()[:12],title=title,group='Hesperian health guides',category='Health and sanitation',publisher='Hesperian Health Guides',edition=sample['edition'],audience='Health reference',source_page='https://languages.hesperian.org/pages/en/pdf.html',url='https://languages.hesperian.org/pages/en/pdf.html',href='https://languages.hesperian.org/pages/en/pdf.html',availability='publisher',format='Publisher chapter downloads',pages=None,bytes=None,description='Obtain chapter PDFs directly from the publisher for your personal offline collection. Digital redistribution requires publisher permission.'))
- site=ROOT/'site';site.mkdir(exist_ok=True)
+ site=(ROOT/'site').resolve();site.mkdir(exist_ok=True)
  private_lookup={(collection/x['local_path']).resolve():x for x in original if x.get('local_path')}
  public_lookup={x['id']:x for x in records}
  for item in records:
   if item['availability']!='hosted':continue
-  x=sources[item['id']];src=collection/x['local_path'];dst=site/x['local_path']
+  x=sources[item['id']];src,dst=public_export_paths(collection,site,x['local_path'])
   dst.parent.mkdir(parents=True,exist_ok=True)
   if x['format']=='PDF':shutil.copy2(src,dst)
   else:
@@ -72,7 +104,7 @@ def run(collection):
     if urlparse(u).scheme:raise ValueError('Unexpected remote embedded image')
     source=(src.parent/unquote(u)).resolve()
     if not source.is_relative_to(collection/'library/assets'):raise ValueError('Unexpected asset path')
-    dest=site/source.relative_to(collection);dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,dest)
+    _src,dest=public_export_paths(collection,site,source.relative_to(collection));dest.parent.mkdir(parents=True,exist_ok=True);shutil.copy2(source,dest)
    for a in soup.select('a[href]'):
     if a['href'].startswith(('http://','https://')):a['target']='_blank';a['rel']='noopener noreferrer'
    dst.write_text(str(soup),encoding='utf-8',newline='\n')

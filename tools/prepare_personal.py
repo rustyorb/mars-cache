@@ -15,6 +15,19 @@ def digest(path):
   for chunk in iter(lambda:f.read(1024*1024),b''):h.update(chunk)
  return h.hexdigest()
 
+ALLOWED_HOSTS={
+ 'hesperian.org','prd-tnm.s3.amazonaws.com',
+ 'www.cdc.gov','stacks.cdc.gov','nchfp.uga.edu',
+ 'transportation.ky.gov','ag.purdue.edu','www.extension.purdue.edu',
+ 'remm.hhs.gov','www.weather.gov','www.epa.gov','www.fema.gov',
+ 'www.in.gov','www.fs.usda.gov','www.energy.gov',
+ 'publications.ca.uky.edu',
+}
+def source_host_allowed(url):
+ from urllib.parse import urlparse
+ parsed=urlparse(url);host=(parsed.hostname or '').lower()
+ return parsed.scheme=='https' and host in ALLOWED_HOSTS
+
 def main():
  parser=argparse.ArgumentParser(description='Download and verify your own offline MARS CACHE.')
  parser.add_argument('--destination',type=Path,default=Path.home()/'MARS-CACHE-Personal')
@@ -25,8 +38,7 @@ def main():
  from urllib.parse import urlparse
  for x in plan:
   if not re.fullmatch('[a-f0-9]{12}',x['id']):raise SystemExit('Invalid resource identifier in plan.')
-  host=urlparse(x['url']).hostname or ''
-  if urlparse(x['url']).scheme!='https' or not (host.endswith(('.gov','.edu','.amazonaws.com','.hesperian.org')) or host=='hesperian.org'):raise SystemExit('Unexpected source in download plan: '+host)
+  if not source_host_allowed(x['url']):raise SystemExit('Unexpected source in download plan: '+(urlparse(x['url']).hostname or ''))
  ids={x['id'] for x in plan}
  if len(ids)!=len(plan):raise SystemExit('Duplicate resource identifiers in plan.')
  core=KIT/'site' if (KIT/'site/catalog.json').exists() else KIT
