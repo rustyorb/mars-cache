@@ -404,5 +404,75 @@ class TestF011Redirects(unittest.TestCase):
         self.assertNotIn(chain[6], calls)
 
 
+
+
+class TestF015RepoTestsSkip(VerifyTreeTest):
+    def test_site_tests_home_text_fails_verify(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mini_site(root)
+            write(root / 'site/tests/leak.txt', 'root is $HOME/cache')
+            rc, out = self._run(root)
+            self.assertEqual(rc, 1, out)
+            self.assertTrue(
+                ('Potential private export' in out) or ('Path is outside the published site layout' in out),
+                out,
+            )
+
+    def test_nested_site_x_tests_home_text_fails_verify(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mini_site(root)
+            write(root / 'site/x/tests/leak.txt', 'root is $HOME/cache')
+            rc, out = self._run(root)
+            self.assertEqual(rc, 1, out)
+            self.assertTrue(
+                ('Potential private export' in out) or ('Path is outside the published site layout' in out),
+                out,
+            )
+
+    def test_allowed_category_tests_home_text_is_scanned(self):
+        # Layout allows nests under an allowed category, so this must be a text-scan hit, not a skip.
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mini_site(root)
+            write(root / 'site/library/maps-and-navigation/tests/leak.txt', 'root is $HOME/cache')
+            rc, out = self._run(root)
+            self.assertEqual(rc, 1, out)
+            self.assertIn('Potential private export', out)
+
+    def test_root_tests_fixtures_are_still_skipped(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            self._mini_site(root)
+            write(root / 'tests/fixture.txt', 'root is $HOME/cache')
+            rc, out = self._run(root)
+            self.assertEqual(rc, 0, out)
+            self.assertNotIn('Potential private export', out)
+
+    def test_ancestor_named_tests_does_not_skip_site_scan(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td) / 'tests' / 'repo'
+            self._mini_site(root)
+            write(root / 'site/library/maps-and-navigation/note.txt', 'root is $HOME/cache')
+            rc, out = self._run(root)
+            self.assertEqual(rc, 1, out)
+            self.assertIn('Potential private export', out)
+
+    def test_root_tests_symlink_outside_is_not_treated_as_fixture_skip(self):
+        # rglob may not descend a directory symlink; the skip helper must still
+        # refuse to treat an escaped ROOT/tests as the fixture tree.
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td)
+            root = base / 'repo'
+            outside = base / 'outside'
+            outside.mkdir(); root.mkdir()
+            write(outside / 'leak.txt', 'root is $HOME/cache')
+            (root / 'tests').symlink_to(outside)
+            leak = root / 'tests' / 'leak.txt'
+            self.assertTrue(leak.exists())
+            self.assertFalse(verify.is_repo_tests_path(leak, root))
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

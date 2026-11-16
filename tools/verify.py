@@ -6,7 +6,7 @@ from urllib.parse import urlparse,unquote
 ROOT=Path(__file__).resolve().parents[1];SITE=ROOT/'site'
 BANNED_PARTS={'loompanics','private','personal-cache','mars-cache-personal','mars-cache-private'}
 RESERVED_SITE_PARTS={'health-and-sanitation','original-html'}
-SKIP_PARTS={'.git','dist','previews','__pycache__','tests'}
+SKIP_PARTS={'.git','dist','previews','__pycache__'}
 # First-level site dirs that may exist; library subdirs from the 4c84262 public tree.
 ALLOWED_SITE_DIRS={'library'}
 ALLOWED_LIBRARY_DIRS={'assets','communications','maps-and-navigation','nuclear-and-radiation','preserving-food','tools-and-power','water-and-immediate-preparedness'}
@@ -95,6 +95,55 @@ def iter_site_entries(site):
   for name in list(dirnames)+list(filenames):
    yield d/name
 
+def resolve_staying_under(path,root):
+ # Resolve path, but do not follow a symlink that leaves root. None if it would escape.
+ root=Path(root);path=Path(path)
+ try:
+  root_res=root.resolve()
+ except OSError:
+  return None
+ if not path.is_absolute():
+  path=(Path.cwd()/path)
+ try:
+  rel=path.relative_to(root)
+ except ValueError:
+  return None
+ cur=root_res
+ for part in rel.parts:
+  nxt=cur/part
+  try:
+   if nxt.is_symlink():
+    target=nxt.resolve()
+    if not target.is_relative_to(root_res):
+     return None
+    cur=target
+   else:
+    cur=nxt
+  except OSError:
+   cur=nxt
+ return cur
+
+def is_repo_tests_path(path,root=None):
+ # Skip only the repo-root tests/ tree, not any path segment named tests.
+ root=Path(root or ROOT)
+ tests=root/'tests'
+ path=Path(path)
+ try:
+  path.relative_to(tests)
+ except ValueError:
+  return False
+ path_res=resolve_staying_under(path,root)
+ tests_res=resolve_staying_under(tests,root)
+ if path_res is None or tests_res is None:
+  return False
+ try:
+  root_res=root.resolve()
+ except OSError:
+  return False
+ if not tests_res.is_relative_to(root_res):
+  return False
+ return path_res.is_relative_to(tests_res)
+
 def site_layout_allowed(path,site=None):
  site=Path(site or SITE)
  path=Path(path)
@@ -153,6 +202,7 @@ def main():
    errors.append('Refusing symlink in published site/: '+str(p.relative_to(ROOT)))
  for p in ROOT.rglob('*'):
   if any(x in p.parts for x in SKIP_PARTS):continue
+  if is_repo_tests_path(p,ROOT):continue
   if p.is_relative_to(SITE) and path_has_symlink(p,SITE):
    errors.append('Refusing symlink in published site/: '+str(p.relative_to(ROOT)));continue
   if not p.is_file():continue
